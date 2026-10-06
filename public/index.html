@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Controle de Presença</title>
+<style>
+  :root { --bg:#f4f6fa; --card:#fff; --txt:#1c2434; --pri:#2f5bea; --bd:#dde2ec; --ok:#1e9e5a; --no:#d64545; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12161f; --card:#1b2130; --txt:#e8ecf4; --bd:#2c3448; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--txt); }
+  header { background:var(--pri); color:#fff; padding:14px 20px; }
+  header h1 { margin:0 0 10px; font-size:20px; }
+  nav { display:flex; gap:6px; flex-wrap:wrap; }
+  nav button { background:rgba(255,255,255,.18); color:#fff; border:0; padding:8px 14px; border-radius:8px; cursor:pointer; }
+  nav button.on { background:#fff; color:var(--pri); font-weight:600; }
+  main { max-width:960px; margin:20px auto; padding:0 16px; }
+  .card { background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:16px; margin-bottom:16px; }
+  h2 { margin:0 0 12px; font-size:18px; }
+  form { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; }
+  label { display:flex; flex-direction:column; font-size:13px; gap:4px; }
+  input, select { padding:8px; border:1px solid var(--bd); border-radius:8px; background:var(--bg); color:var(--txt); font-size:14px; }
+  .btn { background:var(--pri); color:#fff; border:0; padding:10px 16px; border-radius:8px; cursor:pointer; align-self:end; }
+  .tabela { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px; border-bottom:1px solid var(--bd); }
+  .pill { border:1px solid var(--bd); background:transparent; color:var(--txt); padding:6px 12px; border-radius:20px; cursor:pointer; margin-right:6px; }
+  .pill.p.on { background:var(--ok); color:#fff; border-color:var(--ok); }
+  .pill.a.on { background:var(--no); color:#fff; border-color:var(--no); }
+  #msg { color:var(--no); margin-bottom:10px; }
+</style>
+</head>
+<body>
+<header><h1>Controle de Presença</h1><nav id="nav"></nav></header>
+<main><div id="msg"></div><div id="main"></div></main>
+
+<script>
+// f: [coluna, tipo, (select) entidade, coluna-label]
+const E = {
+  alunos: { t:'Alunos', f:[['Nome'],['Email','email'],['Turma'],['Serie']], cols:['CodAluno','Nome','Email','Turma','Serie'] },
+  professores: { t:'Professores', f:[['Nome'],['CPF'],['Email','email'],['AreaDeAtuacao']], cols:['CodProfessor','Nome','CPF','Email','AreaDeAtuacao'] },
+  minicursos: { t:'Minicursos', f:[['Nome'],['Descricao'],['DataInicio','date'],['DataTermino','date'],['CargaHoraria','number'],['CodProfessor','select','professores','Nome']], cols:['CodMiniCurso','Nome','Professor','DataInicio','DataTermino','CargaHoraria'] },
+  matriculas: { t:'Matrículas', f:[['CodAluno','select','alunos','Nome'],['CodMiniCurso','select','minicursos','Nome']], cols:['CodMatricula','Aluno','Minicurso','DataMatricula'] },
+  aulas: { t:'Aulas', f:[['CodMiniCurso','select','minicursos','Nome'],['DataAula','date'],['HorarioDeInicio','time'],['HorarioTermino','time'],['Conteudo']], cols:['CodAula','Minicurso','DataAula','HorarioDeInicio','HorarioTermino','Conteudo'] }
+};
+
+const $ = id => document.getElementById(id);
+const api = async (url, opt) => {
+  const r = await fetch(url, opt && { method: opt.method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(opt.body) });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.erro || 'Erro');
+  return d;
+};
+const fmt = v => {
+  if (typeof v !== 'string' || !/^\d{4}-\d\d-\d\dT/.test(v)) return v ?? '';
+  return v.startsWith('1970-01-01') ? v.slice(11,16) : v.slice(0,10).split('-').reverse().join('/');
+};
+const erro = e => $('msg').textContent = e ? e.message : '';
+
+function menu(ativo) {
+  const abas = [...Object.keys(E).map(k => [k, E[k].t]), ['chamada','Chamada']];
+  $('nav').innerHTML = abas.map(([k,t]) => `<button class="${k===ativo?'on':''}" onclick="abrir('${k}')">${t}</button>`).join('');
+}
+
+async function abrir(k) {
+  erro(); menu(k);
+  try { k === 'chamada' ? await telaChamada() : await telaCadastro(k); } catch (e) { erro(e); }
+}
+
+async function telaCadastro(k) {
+  const e = E[k];
+  const campos = await Promise.all(e.f.map(async ([c, tipo='text', ent, lbl]) => {
+    if (tipo !== 'select') return `<label>${c}<input name="${c}" type="${tipo}" required></label>`;
+    const op = await api('/api/' + ent);
+    const id = Object.keys(op[0] || {})[0];
+    return `<label>${c}<select name="${c}" required>${op.map(o => `<option value="${o[id]}">${o[lbl]}</option>`).join('')}</select></label>`;
+  }));
+  const dados = await api('/api/' + k);
+  $('main').innerHTML = `
+    <div class="card"><h2>Cadastro de ${e.t}</h2>
+      <form id="f">${campos.join('')}<button class="btn">Salvar</button></form></div>
+    <div class="card tabela"><h2>${e.t} cadastrados</h2><table>
+      <tr>${e.cols.map(c => `<th>${c}</th>`).join('')}</tr>
+      ${dados.map(r => `<tr>${e.cols.map(c => `<td>${fmt(r[c])}</td>`).join('')}</tr>`).join('')}
+    </table></div>`;
+  $('f').onsubmit = async ev => {
+    ev.preventDefault();
+    try { await api('/api/' + k, { method:'POST', body: Object.fromEntries(new FormData(ev.target)) }); abrir(k); }
+    catch (x) { erro(x); }
+  };
+}
+
+async function telaChamada() {
+  const aulas = await api('/api/aulas');
+  $('main').innerHTML = `
+    <div class="card"><h2>Chamada</h2>
+      <label>Escolha a aula<select id="aula"><option value="">Selecione...</option>
+      ${aulas.map(a => `<option value="${a.CodAula}">${a.Minicurso} — ${fmt(a.DataAula)} ${fmt(a.HorarioDeInicio)}</option>`).join('')}
+      </select></label></div>
+    <div class="card tabela" id="lista"></div>`;
+  $('aula').onchange = () => carregar($('aula').value);
+}
+
+async function carregar(aula) {
+  if (!aula) { $('lista').innerHTML = ''; return; }
+  try {
+    const l = await api('/api/chamada/' + aula);
+    $('lista').innerHTML = l.length ? `<table><tr><th>Aluno</th><th>Situação</th></tr>` + l.map(r => `
+      <tr><td>${r.Nome}</td><td>
+        <button class="pill p ${r.Situacao==='Presente'?'on':''}" onclick="marcar(${r.CodPresenca},'Presente',${aula})">Presente</button>
+        <button class="pill a ${r.Situacao==='Ausente'?'on':''}" onclick="marcar(${r.CodPresenca},'Ausente',${aula})">Ausente</button>
+      </td></tr>`).join('') + '</table>' : 'Nenhum aluno matriculado neste minicurso.';
+  } catch (e) { erro(e); }
+}
+
+async function marcar(id, situacao, aula) {
+  try { await api('/api/presenca/' + id, { method:'PUT', body:{ situacao } }); carregar(aula); } catch (e) { erro(e); }
+}
+
+abrir('alunos');
+</script>
+</body>
+</html>
