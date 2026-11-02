@@ -2,7 +2,7 @@
 GO
 
 
-/****** Objeto:  Table [dbo].[Aluno]    Data do Script: 06/10/2026 15:21:36 ******/
+
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -21,7 +21,6 @@ PRIMARY KEY CLUSTERED
 GO
 
 
-/****** Objeto:  Table [dbo].[Aula]    Data do Script: 06/10/2026 15:21:36 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -41,7 +40,7 @@ PRIMARY KEY CLUSTERED
 GO
 
 
-/****** Objeto:  Table [dbo].[ControleDePresenca]    Data do Script: 06/10/2026 15:21:36 ******/
+
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -65,7 +64,6 @@ PRIMARY KEY CLUSTERED
 GO
 
 
-/****** Objeto:  Table [dbo].[Matricula]    Data do Script: 06/10/2026 15:21:36 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -88,7 +86,7 @@ PRIMARY KEY CLUSTERED
 GO
 
 
-/****** Objeto:  Table [dbo].[Minicurso]    Data do Script: 06/10/2026 15:21:36 ******/
+
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -109,7 +107,6 @@ PRIMARY KEY CLUSTERED
 GO
 
 
-/****** Objeto:  Table [dbo].[Professor]    Data do Script: 06/10/2026 15:21:36 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
