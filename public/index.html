@@ -28,6 +28,11 @@
   .pill.p.on { background:var(--ok); color:#fff; border-color:var(--ok); }
   .pill.a.on { background:var(--no); color:#fff; border-color:var(--no); }
   #msg { color:var(--no); margin-bottom:10px; }
+  #msg.ok { color:var(--ok); }
+  .dica { font-size:13px; opacity:.75; margin:-6px 0 12px; }
+  .selo { display:inline-block; padding:4px 10px; border-radius:20px; color:#fff; font-weight:600; font-size:13px; }
+  .selo.ok { background:var(--ok); } .selo.no { background:var(--no); } .selo.pend { background:#c98a12; }
+  .barra { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px; }
 </style>
 </head>
 <body>
@@ -41,7 +46,7 @@ const E = {
   professores: { t:'Professores', f:[['Nome'],['CPF'],['Email','email'],['AreaDeAtuacao']], cols:['CodProfessor','Nome','CPF','Email','AreaDeAtuacao'] },
   minicursos: { t:'Minicursos', f:[['Nome'],['Descricao'],['DataInicio','date'],['DataTermino','date'],['CargaHoraria','number'],['CodProfessor','select','professores','Nome']], cols:['CodMiniCurso','Nome','Professor','DataInicio','DataTermino','CargaHoraria'] },
   matriculas: { t:'Matrículas', f:[['CodAluno','select','alunos','Nome'],['CodMiniCurso','select','minicursos','Nome']], cols:['CodMatricula','Aluno','Minicurso','DataMatricula'] },
-  aulas: { t:'Aulas', f:[['CodMiniCurso','select','minicursos','Nome'],['DataAula','date'],['HorarioDeInicio','time'],['HorarioTermino','time'],['Conteudo']], cols:['CodAula','Minicurso','DataAula','HorarioDeInicio','HorarioTermino','Conteudo'] }
+  aulas: { t:'Aulas', f:[['CodMiniCurso','select','minicursos','Nome'],['DataAula','date'],['HorarioDeInicio','time'],['HorarioTermino','time'],['Conteudo']], cols:['CodAula','Minicurso','DataAula','HorarioDeInicio','HorarioTermino','Conteudo','ChamadaConcluida'] }
 };
 
 const $ = id => document.getElementById(id);
@@ -52,19 +57,31 @@ const api = async (url, opt) => {
   return d;
 };
 const fmt = v => {
+  if (typeof v === 'boolean') return v ? 'Sim' : 'Não';
   if (typeof v !== 'string' || !/^\d{4}-\d\d-\d\dT/.test(v)) return v ?? '';
-  return v.startsWith('1970-01-01') ? v.slice(11,16) : v.slice(0,10).split('-').reverse().join('/');
+  const dia = v.slice(0,10).split('-').reverse().join('/'), hora = v.slice(11,16);
+  if (v.startsWith('1970-01-01')) return hora;           // campo de hora
+  return hora === '00:00' ? dia : dia + ' ' + hora;       // data, ou data e hora
 };
-const erro = e => $('msg').textContent = e ? e.message : '';
+const erro = e => { $('msg').className = ''; $('msg').textContent = e ? e.message : ''; };
+const sucesso = t => { $('msg').className = 'ok'; $('msg').textContent = t; };
+// monta uma tabela simples a partir de uma lista de objetos
+const tabela = (dados, cols, vazio) => dados.length
+  ? `<table><tr>${cols.map(([c, t]) => `<th>${t}</th>`).join('')}</tr>` +
+    dados.map(r => `<tr>${cols.map(([c]) => `<td>${fmt(r[c])}</td>`).join('')}</tr>`).join('') + '</table>'
+  : `<p class="dica">${vazio}</p>`;
+const opcoes = (lista, id, txt) => lista.map(o => `<option value="${o[id]}">${o[txt]}</option>`).join('');
 
 function menu(ativo) {
-  const abas = [...Object.keys(E).map(k => [k, E[k].t]), ['chamada','Chamada']];
+  const abas = [...Object.keys(E).map(k => [k, E[k].t]), ['chamada','Chamada'], ['turmas','Turmas'],
+                ['relatorios','Relatórios'], ['certificados','Certificados']];
   $('nav').innerHTML = abas.map(([k,t]) => `<button class="${k===ativo?'on':''}" onclick="abrir('${k}')">${t}</button>`).join('');
 }
 
 async function abrir(k) {
   erro(); menu(k);
-  try { k === 'chamada' ? await telaChamada() : await telaCadastro(k); } catch (e) { erro(e); }
+  const telas = { chamada: telaChamada, turmas: telaTurmas, relatorios: telaRelatorios, certificados: telaCertificados };
+  try { telas[k] ? await telas[k]() : await telaCadastro(k); } catch (e) { erro(e); }
 }
 
 async function telaCadastro(k) {
@@ -90,15 +107,17 @@ async function telaCadastro(k) {
   };
 }
 
-async function telaChamada() {
-  const aulas = await api('/api/aulas');
+let AULAS = [];
+async function telaChamada(selecionada) {
+  const aulas = AULAS = await api('/api/aulas');
   $('main').innerHTML = `
     <div class="card"><h2>Chamada</h2>
       <label>Escolha a aula<select id="aula"><option value="">Selecione...</option>
-      ${aulas.map(a => `<option value="${a.CodAula}">${a.Minicurso} — ${fmt(a.DataAula)} ${fmt(a.HorarioDeInicio)}</option>`).join('')}
+      ${aulas.map(a => `<option value="${a.CodAula}" ${a.CodAula == selecionada ? 'selected' : ''}>${a.Minicurso} — ${fmt(a.DataAula)} ${fmt(a.HorarioDeInicio)}${a.ChamadaConcluida ? ' (concluída)' : ''}</option>`).join('')}
       </select></label></div>
     <div class="card tabela" id="lista"></div>`;
   $('aula').onchange = () => carregar($('aula').value);
+  if (selecionada) carregar(selecionada);
 }
 
 async function carregar(aula) {
@@ -109,12 +128,121 @@ async function carregar(aula) {
       <tr><td>${r.Nome}</td><td>
         <button class="pill p ${r.Situacao==='Presente'?'on':''}" onclick="marcar(${r.CodPresenca},'Presente',${aula})">Presente</button>
         <button class="pill a ${r.Situacao==='Ausente'?'on':''}" onclick="marcar(${r.CodPresenca},'Ausente',${aula})">Ausente</button>
-      </td></tr>`).join('') + '</table>' : 'Nenhum aluno matriculado neste minicurso.';
+      </td></tr>`).join('') + '</table>' + barraConclusao(aula) : 'Nenhum aluno matriculado neste minicurso.';
   } catch (e) { erro(e); }
 }
 
 async function marcar(id, situacao, aula) {
   try { await api('/api/presenca/' + id, { method:'PUT', body:{ situacao } }); carregar(aula); } catch (e) { erro(e); }
+}
+
+// Chamada concluida: so depois disso a aula conta para faltas e frequencia
+function barraConclusao(aula) {
+  const a = AULAS.find(x => x.CodAula == aula);
+  return a && a.ChamadaConcluida
+    ? `<div class="barra"><span class="selo ok">Chamada concluída</span><span class="dica">Esta aula já conta para faltas e frequência.</span></div>`
+    : `<div class="barra"><span class="selo pend">Chamada em aberto</span>
+         <button class="btn" onclick="concluir(${aula})">Concluir chamada</button>
+         <span class="dica">Marque Presente/Ausente e depois conclua. Só chamadas concluídas contam.</span></div>`;
+}
+
+async function concluir(aula) {
+  try { await api(`/api/aulas/${aula}/concluir`, { method:'PUT', body:{} }); erro(); await telaChamada(aula); sucesso('Chamada concluída.'); }
+  catch (e) { erro(e); }
+}
+
+// TURMAS: cadastro, mudanca de turma (trigger 1) e historico
+async function telaTurmas() {
+  const [turmas, alunos, hist] = await Promise.all([api('/api/turmas'), api('/api/alunos'), api('/api/historico-turma')]);
+  $('main').innerHTML = `
+    <div class="card"><h2>Cadastro de Turmas</h2>
+      <p class="dica">O cadastro de aluno só aceita turmas desta lista (procedure sp_CadastrarAlunoNaTurma).</p>
+      <form id="fTurma"><label>Nome<input name="Nome" required></label><button class="btn">Salvar</button></form></div>
+    <div class="card tabela"><h2>Turmas cadastradas</h2>${tabela(turmas, [['CodTurma','Código'],['Nome','Nome']], 'Nenhuma turma cadastrada.')}</div>
+    <div class="card"><h2>Mudar turma do aluno</h2>
+      <p class="dica">A mudança é registrada automaticamente no histórico (trigger trg_Aluno_RegistrarMudancaTurma).</p>
+      <form id="fMuda">
+        <label>Aluno<select name="aluno" required>${alunos.map(a => `<option value="${a.CodAluno}">${a.Nome} (${a.Turma ?? 'sem turma'})</option>`).join('')}</select></label>
+        <label>Nova turma<select name="turma" required>${opcoes(turmas, 'Nome', 'Nome')}</select></label>
+        <button class="btn">Mudar turma</button></form></div>
+    <div class="card tabela"><h2>Histórico de mudanças de turma</h2>
+      ${tabela(hist, [['DataMudanca','Data'],['Aluno','Aluno'],['TurmaAnterior','Turma anterior'],['TurmaNova','Turma nova']], 'Nenhuma mudança registrada.')}</div>`;
+  $('fTurma').onsubmit = async ev => {
+    ev.preventDefault();
+    try { await api('/api/turmas', { method:'POST', body: Object.fromEntries(new FormData(ev.target)) }); await abrir('turmas'); sucesso('Turma cadastrada.'); }
+    catch (x) { erro(x); }
+  };
+  $('fMuda').onsubmit = async ev => {
+    ev.preventDefault();
+    const d = Object.fromEntries(new FormData(ev.target));
+    try { await api(`/api/alunos/${d.aluno}/turma`, { method:'PUT', body:{ turma: d.turma } }); await abrir('turmas'); sucesso('Turma alterada.'); }
+    catch (x) { erro(x); }
+  };
+}
+
+// RELATORIOS: view 1 e function 1
+async function telaRelatorios() {
+  const [sem, seq] = await Promise.all([api('/api/relatorios/sem-presenca'), api('/api/relatorios/sequencia-faltas')]);
+  $('main').innerHTML = `
+    <div class="card tabela"><h2>Alunos sem nenhuma presença</h2>
+      <p class="dica">Alunos com faltas e nenhuma presença nas chamadas concluídas (view vw_AlunosSemPresenca).</p>
+      ${tabela(sem, [['Nome','Aluno'],['Turma','Turma'],['TotalFaltas','Total de faltas']], 'Nenhum aluno nesta situação.')}</div>
+    <div class="card tabela"><h2>Maior sequência de faltas</h2>
+      <p class="dica">Maior número de faltas seguidas nas chamadas concluídas (função fn_MaiorSequenciaFaltas).</p>
+      ${tabela(seq, [['Nome','Aluno'],['Turma','Turma'],['MaiorSequenciaFaltas','Faltas seguidas']], 'Nenhum aluno cadastrado.')}</div>`;
+}
+
+// CERTIFICADOS: procedure 2, function 2, trigger 2 e view 2
+async function telaCertificados() {
+  const [alunos, cursos, certs, canc] = await Promise.all([
+    api('/api/alunos'), api('/api/minicursos'), api('/api/certificados'), api('/api/certificados/cancelamentos')]);
+  const ativos = certs.filter(c => c.Situacao === 'Emitido');
+  $('main').innerHTML = `
+    <div class="card"><h2>Emitir certificado</h2>
+      <p class="dica">Exige frequência mínima de 75% nas chamadas concluídas e não emite duplicado (procedure sp_EmitirCertificado).</p>
+      <form id="fEmitir">
+        <label>Aluno<select name="CodAluno" required>${opcoes(alunos, 'CodAluno', 'Nome')}</select></label>
+        <label>Curso<select name="CodMiniCurso" required>${opcoes(cursos, 'CodMiniCurso', 'Nome')}</select></label>
+        <button class="btn">Emitir</button></form></div>
+    <div class="card"><h2>Validar certificado</h2>
+      <p class="dica">Verifica se o código existe e se não foi cancelado (função fn_ValidarCertificado).</p>
+      <form id="fValidar"><label>Código<input name="codigo" placeholder="ALG-XXXXXXXX" required></label><button class="btn">Validar</button></form>
+      <div class="barra" id="resultado"></div></div>
+    <div class="card"><h2>Cancelar certificado</h2>
+      <p class="dica">Código, data, hora e motivo são registrados automaticamente (trigger trg_Certificado_RegistrarCancelamento).</p>
+      ${ativos.length ? `<form id="fCancelar">
+        <label>Certificado<select name="codigo" required>${ativos.map(c => `<option value="${c.Codigo}">${c.Codigo} — ${c.Aluno}</option>`).join('')}</select></label>
+        <label>Motivo<input name="motivo" required></label>
+               <button class="btn">Cancelar certificado</button></form>` : '<p class="dica">Nenhum certificado ativo para cancelar.</p>'}</div>
+    <div class="card tabela"><h2>Certificados emitidos</h2>
+      ${tabela(certs, [['Codigo','Código'],['Aluno','Aluno'],['Curso','Curso'],['DataEmissao','Emissão'],['Situacao','Situação'],['MotivoCancelamento','Motivo do cancelamento']], 'Nenhum certificado emitido.')}</div>
+    <div class="card tabela"><h2>Registro de cancelamentos</h2>
+      ${tabela(canc, [['Codigo','Código'],['DataCancelamento','Data'],['HoraCancelamento','Hora'],['Motivo','Motivo']], 'Nenhum cancelamento registrado.')}</div>`;
+
+  $('fEmitir').onsubmit = async ev => {
+    ev.preventDefault();
+    try {
+      const r = await api('/api/certificados', { method:'POST', body: Object.fromEntries(new FormData(ev.target)) });
+      await abrir('certificados');
+      sucesso(`Certificado emitido: ${r[0].CodigoCertificado} (frequência ${r[0].Frequencia}%).`);
+    } catch (x) { erro(x); }
+  };
+  $('fValidar').onsubmit = async ev => {
+    ev.preventDefault();
+    try {
+      const cod = new FormData(ev.target).get('codigo').trim();
+      const r = (await api('/api/certificados/validar/' + encodeURIComponent(cod)))[0].Resultado;
+      const cor = r === 'VÁLIDO' ? 'ok' : 'no';
+      $('resultado').innerHTML = `<span class="selo ${cor}">${r}</span><span class="dica">${cod}</span>`;
+      erro();
+    } catch (x) { erro(x); }
+  };
+  if ($('fCancelar')) $('fCancelar').onsubmit = async ev => {
+    ev.preventDefault();
+    const d = Object.fromEntries(new FormData(ev.target));
+    try { await api(`/api/certificados/${encodeURIComponent(d.codigo)}/cancelar`, { method:'PUT', body:{ motivo: d.motivo } }); await abrir('certificados'); sucesso('Certificado cancelado.'); }
+    catch (x) { erro(x); }
+  };
 }
 
 abrir('alunos');

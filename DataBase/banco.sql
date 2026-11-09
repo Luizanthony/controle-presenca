@@ -257,8 +257,23 @@ GO
 
 
 /* =====================================================================
+   CHAMADA CONCLUIDA
+   O professor faz a chamada e clica em "Concluir chamada" na tela.
+   So as aulas com ChamadaConcluida = 1 contam para faltas e frequencia.
+   (Os triggers criam todos como 'Ausente'; sem isso, uma chamada
+   ainda nao feita contaria como falta.)
+   ===================================================================== */
+USE CursoEscola;
+GO
+IF COL_LENGTH('Aula', 'ChamadaConcluida') IS NULL
+  ALTER TABLE Aula ADD ChamadaConcluida BIT NOT NULL
+    CONSTRAINT DF_Aula_ChamadaConcluida DEFAULT 0;
+GO
+
+
+/* =====================================================================
    VIEW 1 e FUNCTION 1
-   Criterio: "chamada concluida" = aula com data de hoje ou anterior.
+   Usam so as chamadas concluidas (Aula.ChamadaConcluida = 1).
    ===================================================================== */
 
 -- VIEW 1: alunos que tem faltas, mas nenhuma presenca nas chamadas concluidas.
@@ -270,7 +285,7 @@ SELECT a.CodAluno,
 FROM Aluno a
 JOIN ControleDePresenca p ON p.CodAluno = a.CodAluno
 JOIN Aula au              ON au.CodAula = p.CodAula
-WHERE au.DataAula <= CAST(GETDATE() AS DATE)          -- so chamadas concluidas
+WHERE au.ChamadaConcluida = 1                         -- so chamadas concluidas
 GROUP BY a.CodAluno, a.Nome, a.Turma
 HAVING SUM(CASE WHEN p.Situacao = 'Presente' THEN 1 ELSE 0 END) = 0;  -- nenhuma presenca
 GO
@@ -288,7 +303,7 @@ BEGIN
     FROM ControleDePresenca p
     JOIN Aula a ON a.CodAula = p.CodAula
     WHERE p.CodAluno = @CodAluno
-      AND a.DataAula <= CAST(GETDATE() AS DATE)
+      AND a.ChamadaConcluida = 1
     ORDER BY a.DataAula, a.HorarioDeInicio, a.CodAula;
 
   OPEN c;
@@ -352,107 +367,4 @@ AS
 BEGIN
   SET NOCOUNT ON;
 
-  DECLARE @FrequenciaMinima DECIMAL(5,2) = 75;   -- <<< frequencia minima (%). Troque aqui se precisar.
-
-  DECLARE @Total INT, @Presencas INT, @Frequencia DECIMAL(5,2),
-          @Codigo VARCHAR(20), @Msg NVARCHAR(400);
-
-  -- Passo 1: o aluno precisa estar matriculado no curso
-  IF NOT EXISTS (SELECT 1 FROM Matricula
-                 WHERE CodAluno = @CodAluno AND CodMiniCurso = @CodMiniCurso)
-  BEGIN
-    THROW 50002, N'Aluno não está matriculado neste curso.', 1;
-  END;
-
-  -- Passo 2: sem duplicidade (nao pode ter outro certificado ativo)
-  IF EXISTS (SELECT 1 FROM Certificado
-             WHERE CodAluno = @CodAluno AND CodMiniCurso = @CodMiniCurso
-               AND Situacao = 'Emitido')
-  BEGIN
-    THROW 50003, N'Este aluno já possui certificado emitido para este curso.', 1;
-  END;
-
-  -- Passo 3: calcular a frequencia nas chamadas concluidas
-  SELECT @Total     = COUNT(*),
-         @Presencas = ISNULL(SUM(CASE WHEN p.Situacao = 'Presente' THEN 1 ELSE 0 END), 0)
-  FROM ControleDePresenca p
-  JOIN Aula a ON a.CodAula = p.CodAula
-  WHERE p.CodAluno = @CodAluno
-    AND a.CodMiniCurso = @CodMiniCurso
-    AND a.DataAula <= CAST(GETDATE() AS DATE);
-
-  IF @Total = 0
-  BEGIN
-    THROW 50004, N'Nenhuma aula concluída para calcular a frequência.', 1;
-  END;
-
-  SET @Frequencia = @Presencas * 100.0 / @Total;
-
-  -- Passo 4: conferir a frequencia minima
-  IF @Frequencia < @FrequenciaMinima
-  BEGIN
-    SET @Msg = CONCAT(N'Frequência insuficiente: ', @Frequencia,
-                      N'%. O mínimo é ', @FrequenciaMinima, N'%.');
-    THROW 50005, @Msg, 1;
-  END;
-
-  -- Passo 5: gerar um codigo unico e emitir
-  SET @Codigo = CONCAT('ALG-', UPPER(LEFT(REPLACE(CONVERT(VARCHAR(36), NEWID()), '-', ''), 8)));
-
-  INSERT INTO Certificado (Codigo, CodAluno, CodMiniCurso)
-  VALUES (@Codigo, @CodAluno, @CodMiniCurso);
-
-  SELECT @Codigo AS CodigoCertificado, @Frequencia AS Frequencia;
-END;
-GO
-
--- VIEW 2: codigo, data de emissao e situacao dos certificados.
-CREATE OR ALTER VIEW vw_CertificadosEmitidos AS
-SELECT c.Codigo,
-       al.Nome AS Aluno,
-       m.Nome  AS Curso,
-       c.DataEmissao,
-       c.Situacao,
-       c.MotivoCancelamento
-FROM Certificado c
-JOIN Aluno al    ON al.CodAluno    = c.CodAluno
-JOIN Minicurso m ON m.CodMiniCurso = c.CodMiniCurso;
-GO
-
--- FUNCTION 2: verifica se o codigo existe e se o certificado nao foi cancelado.
-CREATE OR ALTER FUNCTION dbo.fn_ValidarCertificado (@Codigo VARCHAR(20))
-RETURNS NVARCHAR(20)
-AS
-BEGIN
-  DECLARE @Situacao VARCHAR(20);
-
-  SELECT @Situacao = Situacao FROM Certificado WHERE Codigo = @Codigo;
-
-  IF @Situacao IS NULL        RETURN N'NÃO ENCONTRADO';
-  IF @Situacao = 'Cancelado'  RETURN N'CANCELADO';
-  RETURN N'VÁLIDO';
-END;
-GO
-
--- TRIGGER 2: ao cancelar, salva codigo, data, hora e motivo.
-CREATE OR ALTER TRIGGER trg_Certificado_RegistrarCancelamento ON Certificado AFTER UPDATE AS
-BEGIN
-  SET NOCOUNT ON;
-
-  -- o motivo e obrigatorio para cancelar
-  IF EXISTS (SELECT 1 FROM inserted i
-             JOIN deleted d ON d.CodCertificado = i.CodCertificado
-             WHERE i.Situacao = 'Cancelado' AND d.Situacao <> 'Cancelado'
-               AND (i.MotivoCancelamento IS NULL OR LTRIM(RTRIM(i.MotivoCancelamento)) = ''))
-  BEGIN
-    THROW 50010, N'Informe o motivo do cancelamento.', 1;
-  END;
-
-  -- registra so os certificados que acabaram de ser cancelados
-  INSERT INTO CancelamentoCertificado (Codigo, Motivo)
-  SELECT i.Codigo, i.MotivoCancelamento
-  FROM inserted i
-  JOIN deleted d ON d.CodCertificado = i.CodCertificado
-  WHERE i.Situacao = 'Cancelado' AND d.Situacao <> 'Cancelado';
-END;
-GO
+  DECLARE @FrequenciaMinima DECIMAL(5,2) = 75;
