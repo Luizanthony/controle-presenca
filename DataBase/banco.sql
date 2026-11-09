@@ -2,7 +2,7 @@
 GO
 
 
-
+/****** Objeto:  Table [dbo].[Aluno]    Data do Script: 06/10/2026 15:21:36 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -21,6 +21,7 @@ PRIMARY KEY CLUSTERED
 GO
 
 
+/****** Objeto:  Table [dbo].[Aula]    Data do Script: 06/10/2026 15:21:36 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -40,7 +41,7 @@ PRIMARY KEY CLUSTERED
 GO
 
 
-
+/****** Objeto:  Table [dbo].[ControleDePresenca]    Data do Script: 06/10/2026 15:21:36 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -64,6 +65,7 @@ PRIMARY KEY CLUSTERED
 GO
 
 
+/****** Objeto:  Table [dbo].[Matricula]    Data do Script: 06/10/2026 15:21:36 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -86,7 +88,7 @@ PRIMARY KEY CLUSTERED
 GO
 
 
-
+/****** Objeto:  Table [dbo].[Minicurso]    Data do Script: 06/10/2026 15:21:36 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -107,6 +109,7 @@ PRIMARY KEY CLUSTERED
 GO
 
 
+/****** Objeto:  Table [dbo].[Professor]    Data do Script: 06/10/2026 15:21:36 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -182,5 +185,274 @@ BEGIN
   INSERT INTO ControleDePresenca (CodAluno, CodAula, Situacao)
   SELECT i.CodAluno, a.CodAula, 'Ausente'
   FROM inserted i JOIN Aula a ON a.CodMiniCurso = i.CodMiniCurso;
+END;
+GO
+
+
+/* =====================================================================
+   TURMAS - Procedure 1 (Cadastrar aluno na turma)
+            Trigger 1   (Registrar mudanca de turma)
+   Pode rodar este bloco mais de uma vez sem erro.
+   ===================================================================== */
+USE CursoEscola;
+GO
+
+-- Tabela com as turmas validas. A procedure confere aqui antes de cadastrar.
+IF OBJECT_ID('Turma') IS NULL
+CREATE TABLE Turma (
+  CodTurma INT IDENTITY(1,1) PRIMARY KEY,
+  Nome     VARCHAR(50) NOT NULL UNIQUE   -- mesmo tamanho de Aluno.Turma
+);
+GO
+
+-- Turmas validas. Para aceitar outra turma: INSERT INTO Turma (Nome) VALUES ('Nome da turma');
+IF NOT EXISTS (SELECT 1 FROM Turma)
+  INSERT INTO Turma (Nome) VALUES ('Turma A'), ('Turma B');
+GO
+
+-- Tabela onde o trigger guarda cada mudanca de turma.
+IF OBJECT_ID('HistoricoTurma') IS NULL
+CREATE TABLE HistoricoTurma (
+  CodHistorico  INT IDENTITY(1,1) PRIMARY KEY,
+  CodAluno      INT NOT NULL REFERENCES Aluno(CodAluno),
+  TurmaAnterior VARCHAR(50) NULL,
+  TurmaNova     VARCHAR(50) NULL,
+  DataMudanca   DATETIME NOT NULL DEFAULT GETDATE()
+);
+GO
+
+-- PROCEDURE 1: verifica se a turma existe e so entao cadastra o aluno.
+CREATE OR ALTER PROCEDURE sp_CadastrarAlunoNaTurma
+  @Nome  VARCHAR(100),
+  @Email VARCHAR(100),
+  @Turma VARCHAR(50),
+  @Serie VARCHAR(30)
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  -- Passo 1: verificar a turma
+  IF NOT EXISTS (SELECT 1 FROM Turma WHERE Nome = @Turma)
+  BEGIN
+    THROW 50001, N'Turma não encontrada. Cadastre a turma antes de cadastrar o aluno.', 1;
+  END;
+
+  -- Passo 2: cadastrar o aluno
+  INSERT INTO Aluno (Nome, Email, Turma, Serie)
+  VALUES (@Nome, @Email, @Turma, @Serie);
+END;
+GO
+
+-- TRIGGER 1: quando a turma de um aluno muda, salva anterior, nova e data.
+CREATE OR ALTER TRIGGER trg_Aluno_RegistrarMudancaTurma ON Aluno AFTER UPDATE AS
+BEGIN
+  SET NOCOUNT ON;
+  INSERT INTO HistoricoTurma (CodAluno, TurmaAnterior, TurmaNova)
+  SELECT i.CodAluno, d.Turma, i.Turma
+  FROM inserted i
+  JOIN deleted d ON d.CodAluno = i.CodAluno
+  WHERE ISNULL(d.Turma, '') <> ISNULL(i.Turma, '');   -- so grava se a turma mudou
+END;
+GO
+
+
+/* =====================================================================
+   VIEW 1 e FUNCTION 1
+   Criterio: "chamada concluida" = aula com data de hoje ou anterior.
+   ===================================================================== */
+
+-- VIEW 1: alunos que tem faltas, mas nenhuma presenca nas chamadas concluidas.
+CREATE OR ALTER VIEW vw_AlunosSemPresenca AS
+SELECT a.CodAluno,
+       a.Nome,
+       a.Turma,
+       COUNT(*) AS TotalFaltas
+FROM Aluno a
+JOIN ControleDePresenca p ON p.CodAluno = a.CodAluno
+JOIN Aula au              ON au.CodAula = p.CodAula
+WHERE au.DataAula <= CAST(GETDATE() AS DATE)          -- so chamadas concluidas
+GROUP BY a.CodAluno, a.Nome, a.Turma
+HAVING SUM(CASE WHEN p.Situacao = 'Presente' THEN 1 ELSE 0 END) = 0;  -- nenhuma presenca
+GO
+
+-- FUNCTION 1: maior numero de faltas seguidas de um aluno nas chamadas concluidas.
+CREATE OR ALTER FUNCTION dbo.fn_MaiorSequenciaFaltas (@CodAluno INT)
+RETURNS INT
+AS
+BEGIN
+  DECLARE @Atual INT = 0, @Maior INT = 0, @Situacao VARCHAR(20);
+
+  -- percorre as chamadas do aluno em ordem de data
+  DECLARE c CURSOR LOCAL FAST_FORWARD FOR
+    SELECT p.Situacao
+    FROM ControleDePresenca p
+    JOIN Aula a ON a.CodAula = p.CodAula
+    WHERE p.CodAluno = @CodAluno
+      AND a.DataAula <= CAST(GETDATE() AS DATE)
+    ORDER BY a.DataAula, a.HorarioDeInicio, a.CodAula;
+
+  OPEN c;
+  FETCH NEXT FROM c INTO @Situacao;
+  WHILE @@FETCH_STATUS = 0
+  BEGIN
+    IF @Situacao = 'Ausente'
+    BEGIN
+      SET @Atual = @Atual + 1;                    -- mais uma falta seguida
+      IF @Atual > @Maior SET @Maior = @Atual;     -- guarda o recorde
+    END
+    ELSE
+      SET @Atual = 0;                             -- presenca zera a contagem
+    FETCH NEXT FROM c INTO @Situacao;
+  END;
+  CLOSE c;
+  DEALLOCATE c;
+
+  RETURN @Maior;
+END;
+GO
+
+
+/* =====================================================================
+   CERTIFICADOS - Procedure 2 (Emitir certificado)
+                  View 2      (Certificados emitidos)
+                  Function 2  (Validar certificado)
+                  Trigger 2   (Registrar cancelamento de certificado)
+   ===================================================================== */
+
+-- Tabela dos certificados
+IF OBJECT_ID('Certificado') IS NULL
+CREATE TABLE Certificado (
+  CodCertificado     INT IDENTITY(1,1) PRIMARY KEY,
+  Codigo             VARCHAR(20) NOT NULL UNIQUE,
+  CodAluno           INT NOT NULL REFERENCES Aluno(CodAluno),
+  CodMiniCurso       INT NOT NULL REFERENCES Minicurso(CodMiniCurso),
+  DataEmissao        DATETIME NOT NULL DEFAULT GETDATE(),
+  Situacao           VARCHAR(20) NOT NULL DEFAULT 'Emitido'
+                     CHECK (Situacao IN ('Emitido', 'Cancelado')),
+  MotivoCancelamento VARCHAR(200) NULL
+);
+GO
+
+-- Tabela onde o trigger 2 registra cada cancelamento
+IF OBJECT_ID('CancelamentoCertificado') IS NULL
+CREATE TABLE CancelamentoCertificado (
+  CodCancelamento  INT IDENTITY(1,1) PRIMARY KEY,
+  Codigo           VARCHAR(20) NOT NULL,
+  DataCancelamento DATE    NOT NULL DEFAULT CAST(GETDATE() AS DATE),
+  HoraCancelamento TIME(0) NOT NULL DEFAULT CAST(GETDATE() AS TIME(0)),
+  Motivo           VARCHAR(200) NOT NULL
+);
+GO
+
+-- PROCEDURE 2: verifica a frequencia e emite o certificado sem duplicidade.
+CREATE OR ALTER PROCEDURE sp_EmitirCertificado
+  @CodAluno     INT,
+  @CodMiniCurso INT
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  DECLARE @FrequenciaMinima DECIMAL(5,2) = 75;   -- <<< frequencia minima (%). Troque aqui se precisar.
+
+  DECLARE @Total INT, @Presencas INT, @Frequencia DECIMAL(5,2),
+          @Codigo VARCHAR(20), @Msg NVARCHAR(400);
+
+  -- Passo 1: o aluno precisa estar matriculado no curso
+  IF NOT EXISTS (SELECT 1 FROM Matricula
+                 WHERE CodAluno = @CodAluno AND CodMiniCurso = @CodMiniCurso)
+  BEGIN
+    THROW 50002, N'Aluno não está matriculado neste curso.', 1;
+  END;
+
+  -- Passo 2: sem duplicidade (nao pode ter outro certificado ativo)
+  IF EXISTS (SELECT 1 FROM Certificado
+             WHERE CodAluno = @CodAluno AND CodMiniCurso = @CodMiniCurso
+               AND Situacao = 'Emitido')
+  BEGIN
+    THROW 50003, N'Este aluno já possui certificado emitido para este curso.', 1;
+  END;
+
+  -- Passo 3: calcular a frequencia nas chamadas concluidas
+  SELECT @Total     = COUNT(*),
+         @Presencas = ISNULL(SUM(CASE WHEN p.Situacao = 'Presente' THEN 1 ELSE 0 END), 0)
+  FROM ControleDePresenca p
+  JOIN Aula a ON a.CodAula = p.CodAula
+  WHERE p.CodAluno = @CodAluno
+    AND a.CodMiniCurso = @CodMiniCurso
+    AND a.DataAula <= CAST(GETDATE() AS DATE);
+
+  IF @Total = 0
+  BEGIN
+    THROW 50004, N'Nenhuma aula concluída para calcular a frequência.', 1;
+  END;
+
+  SET @Frequencia = @Presencas * 100.0 / @Total;
+
+  -- Passo 4: conferir a frequencia minima
+  IF @Frequencia < @FrequenciaMinima
+  BEGIN
+    SET @Msg = CONCAT(N'Frequência insuficiente: ', @Frequencia,
+                      N'%. O mínimo é ', @FrequenciaMinima, N'%.');
+    THROW 50005, @Msg, 1;
+  END;
+
+  -- Passo 5: gerar um codigo unico e emitir
+  SET @Codigo = CONCAT('ALG-', UPPER(LEFT(REPLACE(CONVERT(VARCHAR(36), NEWID()), '-', ''), 8)));
+
+  INSERT INTO Certificado (Codigo, CodAluno, CodMiniCurso)
+  VALUES (@Codigo, @CodAluno, @CodMiniCurso);
+
+  SELECT @Codigo AS CodigoCertificado, @Frequencia AS Frequencia;
+END;
+GO
+
+-- VIEW 2: codigo, data de emissao e situacao dos certificados.
+CREATE OR ALTER VIEW vw_CertificadosEmitidos AS
+SELECT c.Codigo,
+       al.Nome AS Aluno,
+       m.Nome  AS Curso,
+       c.DataEmissao,
+       c.Situacao,
+       c.MotivoCancelamento
+FROM Certificado c
+JOIN Aluno al    ON al.CodAluno    = c.CodAluno
+JOIN Minicurso m ON m.CodMiniCurso = c.CodMiniCurso;
+GO
+
+-- FUNCTION 2: verifica se o codigo existe e se o certificado nao foi cancelado.
+CREATE OR ALTER FUNCTION dbo.fn_ValidarCertificado (@Codigo VARCHAR(20))
+RETURNS NVARCHAR(20)
+AS
+BEGIN
+  DECLARE @Situacao VARCHAR(20);
+
+  SELECT @Situacao = Situacao FROM Certificado WHERE Codigo = @Codigo;
+
+  IF @Situacao IS NULL        RETURN N'NÃO ENCONTRADO';
+  IF @Situacao = 'Cancelado'  RETURN N'CANCELADO';
+  RETURN N'VÁLIDO';
+END;
+GO
+
+-- TRIGGER 2: ao cancelar, salva codigo, data, hora e motivo.
+CREATE OR ALTER TRIGGER trg_Certificado_RegistrarCancelamento ON Certificado AFTER UPDATE AS
+BEGIN
+  SET NOCOUNT ON;
+
+  -- o motivo e obrigatorio para cancelar
+  IF EXISTS (SELECT 1 FROM inserted i
+             JOIN deleted d ON d.CodCertificado = i.CodCertificado
+             WHERE i.Situacao = 'Cancelado' AND d.Situacao <> 'Cancelado'
+               AND (i.MotivoCancelamento IS NULL OR LTRIM(RTRIM(i.MotivoCancelamento)) = ''))
+  BEGIN
+    THROW 50010, N'Informe o motivo do cancelamento.', 1;
+  END;
+
+  -- registra so os certificados que acabaram de ser cancelados
+  INSERT INTO CancelamentoCertificado (Codigo, Motivo)
+  SELECT i.Codigo, i.MotivoCancelamento
+  FROM inserted i
+  JOIN deleted d ON d.CodCertificado = i.CodCertificado
+  WHERE i.Situacao = 'Cancelado' AND d.Situacao <> 'Cancelado';
 END;
 GO

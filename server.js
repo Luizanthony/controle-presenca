@@ -9,7 +9,7 @@ app.use(express.static('public'));
 const pool = sql.connect({
   connectionString:
     'Driver={ODBC Driver 18 for SQL Server};' +
-    'Server=localhost\\SQLEXPRESS;' +
+    'Server=' + (process.env.DB_SERVER || 'localhost\\SQLEXPRESS') + ';' +
     'Database=' + (process.env.DB_NAME || 'CursoEscola') + ';' +
     'Trusted_Connection=Yes;TrustServerCertificate=Yes;'
 });
@@ -38,6 +38,14 @@ const T = {
     sel: `SELECT a.CodAula, m.Nome Minicurso, a.DataAula, a.HorarioDeInicio, a.HorarioTermino, a.Conteudo
           FROM Aula a JOIN Minicurso m ON m.CodMiniCurso = a.CodMiniCurso ORDER BY a.DataAula DESC` }
 };
+
+// Cadastro de aluno passa pela procedure, que verifica a turma antes de salvar.
+// Fica antes do laço abaixo para o Express usar esta rota no lugar do INSERT genérico.
+app.post('/api/alunos', (req, res) => {
+  const p = {};
+  ['Nome', 'Email', 'Turma', 'Serie'].forEach(c => p[c] = req.body[c] === '' ? null : req.body[c]);
+  run(res, 'EXEC sp_CadastrarAlunoNaTurma @Nome, @Email, @Turma, @Serie', p);
+});
 
 for (const [rota, t] of Object.entries(T)) {
   app.get('/api/' + rota, (req, res) => run(res, t.sel));
